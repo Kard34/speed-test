@@ -131,7 +131,8 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	x := "SELECT DOCID, TIME64, HEADLINE FROM HDL WHERE INVDOCID IN (" + strings.Join(placeholders, ",") + ")"
+	x := "SELECT DOCID, TIME64, HEADLINE FROM HDL WHERE INVDOCID IN (" + strings.Join(placeholders, ",") + ") AND TIME64 >= ? AND TIME64 <= ?"
+	args = append(args, timex.UnixMilli(), timey.UnixMilli())
 	rows, err := Db.Query(x, args...)
 	checkerror(err)
 	defer rows.Close()
@@ -139,13 +140,10 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 		var DOCID string
 		var TIME64 int64
 		var HEADLINE string
-
 		err := rows.Scan(&DOCID, &TIME64, &HEADLINE)
 		checkerror(err)
-		if TIME64 >= timex.UnixMilli() && TIME64 <= timey.UnixMilli() {
-			DisplayTime := time.UnixMilli(int64(TIME64))
-			listdata = append(listdata, DisplayTime.UTC().Format("2006-01-02T15:04:05")+" "+DOCID+" "+HEADLINE+"\n")
-		}
+		DisplayTime := time.UnixMilli(int64(TIME64))
+		listdata = append(listdata, DisplayTime.UTC().Format("2006-01-02T15:04:05")+" "+DOCID+" "+HEADLINE+"\n")
 	}
 	sort.Slice(listdata, func(i, j int) bool {
 		return listdata[i] < listdata[j]
