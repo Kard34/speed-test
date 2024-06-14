@@ -74,9 +74,10 @@ var (
 	// Query = []Flatnode{{0, -1, -1, "all"}} // result : 6507
 	// Query = []Flatnode{{0, -1, -1, "it"}} // result : 10204
 	// Query = []Flatnode{{0, -1, -1, "the"}} // result : 16742
-	Query = []Flatnode{{0, -1, -1, "ที่"}} // result : 16749
+	// Query = []Flatnode{{0, -1, -1, "ที่"}} // result : 16749
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "และ"}, {2, -1, -1, "ที่"}} // 16749/16069
 	// Query = []Flatnode{{0, -1, -1, "และ"}} // result : 16096
+	Query = []Flatnode{{0, -1, -1, "ยิว"}} // result : 13
 	Limit = 10000
 	START ftime.CTime
 	END   ftime.CTime
@@ -91,6 +92,7 @@ var (
 )
 
 func main() {
+	OAx := time.Now()
 	// ! Open .idx file
 	fidx, err := os.Open(Path + Filename + ".idx")
 	checkerror(err)
@@ -107,12 +109,20 @@ func main() {
 	Fmap = fmap
 	defer Fmap.Close()
 	// * Load ...
+	x1 := time.Now()
 	Load()
+	x2 := time.Now()
 	START.Parse("2024-01-29T00:00:00")
 	END.Parse("2024-01-29T23:59:59")
 	Root := MakeTree(Query)
 	Result := Search(Root, Limit, START, END)
-	fmt.Println(Result)
+	x3 := time.Now()
+	OAy := time.Now()
+	// fmt.Println(Result)
+	fmt.Println("RESULT : ", len(Result))
+	fmt.Println("LOAD TIME : ", x2.Sub(x1))
+	fmt.Println("SEARCH TIME :", x3.Sub(x2))
+	fmt.Println("OVERALL : ", OAy.Sub(OAx))
 }
 
 func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []string) {
@@ -131,9 +141,9 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 	for _, x := range ID_List {
 		if HdlData[x].Time64 >= timex.UnixMilli() && HdlData[x].Time64 <= timey.UnixMilli() {
 			listdata = append(listdata, HdlData[x].DisplayTime+" "+HdlData[x].DocID+" "+HdlData[x].Headline+"\n")
-			if len(listdata) == limit {
-				break
-			}
+			// if len(listdata) == limit {
+			// 	break
+			// }
 		}
 	}
 
