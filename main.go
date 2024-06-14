@@ -2,18 +2,20 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"speed-test/ftime"
+	"speed-test/imaz"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/varokas/tis620"
 )
 
 type Flatnode struct {
@@ -29,7 +31,7 @@ type Treenode struct {
 	Right *Treenode
 }
 
-type ChunkData struct {
+type chunkData struct {
 	Index         int
 	Position      int
 	Allocate      int
@@ -38,78 +40,79 @@ type ChunkData struct {
 	CountPosition int
 }
 
+type idxHeader struct {
+	Start    int32
+	Allocate int32
+	Used     int32
+}
+
+type Hdl struct {
+	Size        uint16
+	InvID       uint64
+	Time64      int64
+	DisplayTime string
+	Timex       time.Time
+	IDSize      int
+	DocID       string
+	IMAZSize    uint16
+	Position    int
+	Headline    string
+	Txid        int
+}
+
 var (
 	Path     = "./Index/"
 	Filename = "20240129"
 
 	Fidx *os.File
-	Db   *sql.DB
+	Fhdl *os.File
+	Fmap *os.File
 
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "ค่าเงิน"}, {2, -1, -1, "บาท"}}
-	// query = "('ค่าเงิน','บาท')"
-
 	// Query = []Flatnode{{0, -1, -1, "ประเทศไทย"}}
-	// query = "('ประเทศไทย')"
-
 	// Query = []Flatnode{{0, -1, -1, "2"}} // result : 13811
-	// query = "('2')"
-
 	// Query = []Flatnode{{0, -1, -1, "all"}} // result : 6507
-	// query = "('all')"
-
 	// Query = []Flatnode{{0, -1, -1, "it"}} // result : 10204
-	// query = "('it')"
-
 	// Query = []Flatnode{{0, -1, -1, "the"}} // result : 16742
-	// query = "('the')"
-
 	Query = []Flatnode{{0, -1, -1, "ที่"}} // result : 16749
-	query = "('ที่')"
-
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "และ"}, {2, -1, -1, "ที่"}} // 16749/16069
-	// query = "('และ','ที่')"
-
 	// Query = []Flatnode{{0, -1, -1, "และ"}} // result : 16096
-	// query = "('และ')"
 	Limit = 10000
 	START ftime.CTime
 	END   ftime.CTime
 
-	CkData map[string]ChunkData
+	WordPosition  idxHeader
+	WordData      idxHeader
+	ChunkPosition idxHeader
+	ChunkData     idxHeader
+
+	CkData  map[string]chunkData
+	HdlData map[uint64]Hdl
 )
 
 func main() {
-	OAx := time.Now()
 	// ! Open .idx file
 	fidx, err := os.Open(Path + Filename + ".idx")
 	checkerror(err)
 	Fidx = fidx
 	defer Fidx.Close()
-
-	// ! Open .sqlite file
-	db, err := sql.Open("sqlite3", Path+Filename+".sqlite")
+	// * Open .hdl file
+	fhdl, err := os.Open(Path + Filename + ".hdl")
 	checkerror(err)
-	Db = db
-	defer Db.Close()
-	Lx := time.Now()
-
-	// ! Load word chunkdata header
+	Fhdl = fhdl
+	defer Fhdl.Close()
+	// * Open .map file
+	fmap, err := os.Open(Path + Filename + ".map")
+	checkerror(err)
+	Fmap = fmap
+	defer Fmap.Close()
+	// * Load ...
 	Load()
-	Ly := time.Now()
-
 	START.Parse("2024-01-29T00:00:00")
 	END.Parse("2024-01-29T23:59:59")
 	Root := MakeTree(Query)
-	Sx := time.Now()
 	Result := Search(Root, Limit, START, END)
-	Sy := time.Now()
 	fmt.Println(Result)
-	fmt.Println("Result : ", len(Result))
-	OAy := time.Now()
-
-	fmt.Println("Load Time : ", Ly.Sub(Lx))
-	fmt.Println("Search Time : ", Sy.Sub(Sx))
-	fmt.Println("Overall Time : ", OAy.Sub(OAx))
 }
 
 func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []string) {
@@ -125,28 +128,15 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 	Buffy = append(Buffy, []byte{0, 0, 0}...)
 	ID_List := SearchData(tree, Buffx, Buffy)
 
-	placeholders := make([]string, len(ID_List))
-	args := make([]interface{}, len(ID_List))
-	for i, id := range ID_List {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	x := "SELECT DOCID, TIME64, HEADLINE FROM HDL WHERE INVDOCID IN (" + strings.Join(placeholders, ",") + ")"
-	rows, err := Db.Query(x, args...)
-	checkerror(err)
-	defer rows.Close()
-	for rows.Next() {
-		var DOCID string
-		var TIME64 int64
-		var HEADLINE string
-
-		err := rows.Scan(&DOCID, &TIME64, &HEADLINE)
-		checkerror(err)
-		if TIME64 >= timex.UnixMilli() && TIME64 <= timey.UnixMilli() {
-			DisplayTime := time.UnixMilli(int64(TIME64))
-			listdata = append(listdata, DisplayTime.UTC().Format("2006-01-02T15:04:05")+" "+DOCID+" "+HEADLINE+"\n")
+	for _, x := range ID_List {
+		if HdlData[x].Time64 >= timex.UnixMilli() && HdlData[x].Time64 <= timey.UnixMilli() {
+			listdata = append(listdata, HdlData[x].DisplayTime+" "+HdlData[x].DocID+" "+HdlData[x].Headline+"\n")
+			if len(listdata) == limit {
+				break
+			}
 		}
 	}
+
 	sort.Slice(listdata, func(i, j int) bool {
 		return listdata[i] < listdata[j]
 	})
@@ -165,10 +155,10 @@ func SearchData(tree *Treenode, buffx, buffy []byte) (invdocid_list []uint64) {
 	return
 }
 
-func SearchMatching(tree *Treenode, buffx, buffy []byte) (chunkdata ChunkData, buff []byte) {
-	var Chunk1 ChunkData
+func SearchMatching(tree *Treenode, buffx, buffy []byte) (chunkdata chunkData, buff []byte) {
+	var Chunk1 chunkData
 	var Buff1 []byte
-	var Chunk2 ChunkData
+	var Chunk2 chunkData
 	var Buff2 []byte
 	if tree.Left != nil {
 		Chunk1, Buff1 = SearchMatching(tree.Left, buffx, buffy)
@@ -184,7 +174,7 @@ func SearchMatching(tree *Treenode, buffx, buffy []byte) (chunkdata ChunkData, b
 	return
 }
 
-func LoadWord(word string, buffx, buffy []byte) (chunkdata ChunkData, buff []byte) {
+func LoadWord(word string, buffx, buffy []byte) (chunkdata chunkData, buff []byte) {
 	Lpos1, Found1 := BinaryChunkBuff(buffx, word)
 	Lpos2, Found2 := BinaryChunkBuff(buffy, word)
 	_ = Found1
@@ -194,7 +184,7 @@ func LoadWord(word string, buffx, buffy []byte) (chunkdata ChunkData, buff []byt
 	Allocate := 16
 	CountDocument := 0
 	CountPosition := 0
-	StartPoint := int32(CkData[word].Position) + 16
+	StartPoint := ChunkData.Start + int32(CkData[word].Position) + 16
 	INVDOCID_LIST := make([]byte, 0)
 	PositionPoint := make([]int32, 2)
 
@@ -229,7 +219,7 @@ func LoadWord(word string, buffx, buffy []byte) (chunkdata ChunkData, buff []byt
 	Fidx.Read(Buff)
 	buff = append(buff, INVDOCID_LIST...)
 	buff = append(buff, Buff...)
-	chunkdata = ChunkData{CkData[word].Index, CkData[word].Position, Allocate + (CountPosition * 2), CountDocument, Allocate - 16, CountPosition}
+	chunkdata = chunkData{CkData[word].Index, CkData[word].Position, Allocate + (CountPosition * 2), CountDocument, Allocate - 16, CountPosition}
 	return
 }
 
@@ -238,7 +228,7 @@ func BinaryChunkBuff(buffsearch []byte, word string) (lpos int, found bool) {
 	LposHi := CkData[word].CountDocument - 1
 	CompareResult := -1
 	lpos = 0
-	StartPoint := int32(CkData[word].Position) + 16
+	StartPoint := ChunkData.Start + int32(CkData[word].Position) + 16
 	for LposLo <= LposHi {
 		lpos = (LposLo + LposHi) / 2
 		Buff := make([]byte, 10)
@@ -260,10 +250,10 @@ func BinaryChunkBuff(buffsearch []byte, word string) (lpos int, found bool) {
 	return
 }
 
-func Match(cho1, cho2 ChunkData, buffw1, buffw2 []byte, op string) (cho ChunkData, buff []byte) {
+func Match(cho1, cho2 chunkData, buffw1, buffw2 []byte, op string) (cho chunkData, buff []byte) {
 	idx := 0
 	jdx := 0
-	cho = ChunkData{-1, -1, 0, 0, 0, 0}
+	cho = chunkData{-1, -1, 0, 0, 0, 0}
 	buffdoc := make([]byte, 0)
 	buffpos := make([]byte, 0)
 	buff0 := make([]byte, 5)
@@ -383,28 +373,146 @@ func comparepharse(bo1 []byte, bo2 []byte, diff int) (buff []byte) {
 }
 
 func Load() {
-	x := "SELECT * FROM IDX WHERE WORD IN " + query
-	rows, err := Db.Query(x)
-	checkerror(err)
+	LoadIDX()
+	LoadHDL()
+}
 
-	CkData = map[string]ChunkData{}
-
-	for rows.Next() {
-		var WORD string
-		var INDEX int
-		var POSITION int
-		var ALLOCATE int
-		var COUNTDOCMENT int
-		var STARTPOSITION int
-		var COUNTPOSITION int
-
-		err := rows.Scan(&WORD, &INDEX, &POSITION, &ALLOCATE, &COUNTDOCMENT, &STARTPOSITION, &COUNTPOSITION)
-		checkerror(err)
-		CkData[WORD] = ChunkData{INDEX, POSITION, ALLOCATE, COUNTDOCMENT, STARTPOSITION, COUNTPOSITION}
+func LoadIDX() {
+	Head := make([]byte, 48)
+	Fidx.Seek(0, io.SeekStart)
+	Fidx.Read(Head)
+	HeadList := make([]int32, 0)
+	for i := 0; i < len(Head)/4; i++ {
+		Data := binary.LittleEndian.Uint32(Head[i*4 : (i*4)+4])
+		HeadList = append(HeadList, int32(Data))
 	}
-	if err = rows.Err(); err != nil {
-		panic(err)
+	WordPosition = idxHeader{HeadList[0], HeadList[1], HeadList[2]}
+	WordData = idxHeader{HeadList[3], HeadList[4], HeadList[5]}
+	ChunkPosition = idxHeader{HeadList[6], HeadList[7], HeadList[8]}
+	ChunkData = idxHeader{HeadList[9], HeadList[10], HeadList[11]}
+	word_position := ReadPosition(WordPosition)
+	word_list := ReadWord(WordData, word_position)
+	chunk_position := ReadPosition(ChunkPosition)
+	if len(word_list) == len(chunk_position) {
+		CkData = map[string]chunkData{}
+		for i := 0; i < len(word_list); i++ {
+			Buff := make([]byte, 16)
+			Fidx.Seek(int64(ChunkData.Start+int32(chunk_position[i])), io.SeekStart)
+			Fidx.Read(Buff)
+			temp := make([]int, 0)
+			for j := 0; j < 4; j++ {
+				Data := binary.LittleEndian.Uint32(Buff[j*4 : (j*4)+4])
+				temp = append(temp, int(Data))
+			}
+			CkData[word_list[i]] = chunkData{i, chunk_position[i], temp[0], temp[1], temp[2], temp[3]}
+		}
 	}
+
+}
+
+func ReadPosition(head idxHeader) (position_list []int) {
+	Buff := make([]byte, head.Used*4)
+	Fidx.Seek(int64(head.Start), io.SeekStart)
+	Fidx.Read(Buff)
+	for i := 0; i < int(head.Used); i++ {
+		Data := binary.LittleEndian.Uint32(Buff[i*4 : (i*4)+4])
+		position_list = append(position_list, int(Data))
+	}
+	return
+}
+
+func ReadWord(head idxHeader, position_list []int) (word_list []string) {
+	Buff := make([]byte, head.Used)
+	Fidx.Seek(int64(head.Start), io.SeekStart)
+	Fidx.Read(Buff)
+	for i := 0; i < len(position_list); i++ {
+		var Data []byte
+		if i == len(position_list)-1 {
+			Data = Buff[position_list[i]:]
+		} else {
+			Data = Buff[position_list[i] : position_list[i+1]-1]
+		}
+		word_list = append(word_list, string(tis620.ToUTF8(Data)))
+	}
+	return
+}
+
+func LoadHDL() {
+	position_list := ReadMap()
+	HdlData = map[uint64]Hdl{}
+	for i := range position_list {
+		x := ReadHdl(int64(position_list[i]))
+		x.Position = int(position_list[i])
+		HdlData[x.InvID] = x
+	}
+}
+
+func ReadHdl(seek int64) (hdl Hdl) {
+	Head := make([]byte, 50)
+	Fhdl.Seek(seek, io.SeekStart)
+	Fhdl.Read(Head)
+	Size := binary.LittleEndian.Uint16(Head[48:50])
+	Buff := make([]byte, Size)
+	Fhdl.Read(Buff)
+	Buff8 := make([]byte, 0)
+	Buff8 = append(Buff8, Head[2:7]...)
+	Buff8 = append(Buff8, []byte{0, 0, 0}...)
+	INVID := binary.LittleEndian.Uint64(Buff8)
+
+	BuffTime := Head[7:15]
+	Float := float64FromBytes(BuffTime)
+	TIME64 := int64((Float - 25569) * 24 * 3600 * 1000)
+	TIMEX := time.UnixMilli(TIME64)
+
+	xx, _ := imaz.ParserHDL(Buff)
+	var HEADLINE string
+	if len(xx.AbstractData) > 0 {
+		var v map[string]any
+		json.Unmarshal([]byte(xx.AbstractData), &v)
+		if hl, found := v["HL"]; found {
+			if len(hl.(string)) > 0 {
+				HEADLINE = hl.(string)
+			}
+		}
+		if hx, found := v["HX"]; found {
+			if len(hx.(string)) > 0 {
+				HEADLINE = hx.(string)
+			}
+		}
+	}
+	hdl = Hdl{
+		Size:        binary.LittleEndian.Uint16(Head[0:2]),
+		InvID:       INVID,
+		Time64:      TIME64,
+		DisplayTime: TIMEX.UTC().Format("2006-01-02T15:04:05"),
+		Timex:       TIMEX,
+		IDSize:      int(Head[15]),
+		DocID:       string(Head[16:48]),
+		Position:    0,
+		Headline:    HEADLINE,
+		IMAZSize:    binary.LittleEndian.Uint16(Head[48:50]),
+	}
+	return
+}
+
+func ReadMap() (position_list []int32) {
+	temp := make([]byte, 2980)
+	Fmap.Seek(0, io.SeekStart)
+	Fmap.Read(temp)
+	Size := binary.LittleEndian.Uint32(temp[0:4])
+	Buff := make([]byte, Size*4)
+	Fmap.Read(Buff)
+	for i := 0; i < len(Buff)/4; i++ {
+		Data := binary.LittleEndian.Uint32(Buff[i*4 : (i*4)+4])
+		position_list = append(position_list, int32(Data))
+	}
+	return
+}
+
+func float64FromBytes(bytes []byte) float64 {
+	bits := binary.LittleEndian.Uint64(bytes)
+	float := math.Float64frombits(bits)
+	return float
 }
 
 func MakeTree(query []Flatnode) (root *Treenode) {
