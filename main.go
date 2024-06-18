@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"speed-test/ftime"
+	"github.com/Kard34/speed-test/ftime"
 
 	_ "github.com/mattn/go-sqlite3"
 )
