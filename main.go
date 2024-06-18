@@ -11,8 +11,8 @@ import (
 	"sort"
 	"time"
 
-	"speed-test/ftime"
-	"speed-test/imaz"
+	"github.com/Kard34/speed-test/ftime"
+	"github.com/Kard34/speed-test/imaz"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/varokas/tis620"

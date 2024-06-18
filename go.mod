@@ -1,4 +1,4 @@
-module speed-test
+module github.com/Kard34/speed-test
 
 go 1.22.2
 
