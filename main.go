@@ -17,10 +17,10 @@ import (
 )
 
 type Flatnode struct {
-	Index int
-	Left  int
-	Right int
-	Value string
+	Index int    `json: "index"`
+	Left  int    `json: "left"`
+	Right int    `json: "right"`
+	Value string `json: "value"`
 }
 
 type Treenode struct {
@@ -63,15 +63,24 @@ var (
 	// Query = []Flatnode{{0, -1, -1, "the"}} // result : 16742
 	// query = "('the')"
 
-	Query = []Flatnode{{0, -1, -1, "ที่"}} // result : 16749
-	query = "('ที่')"
+	// Query = []Flatnode{{0, -1, -1, "ที่"}} // result : 16749
+	// query = "('ที่')"
 
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "และ"}, {2, -1, -1, "ที่"}} // 16749/16069
 	// query = "('และ','ที่')"
 
 	// Query = []Flatnode{{0, -1, -1, "และ"}} // result : 16096
 	// query = "('และ')"
-	Limit = 10000
+
+	// Query = []Flatnode{{0, -1, -1, "ยิว"}} // result : 16749
+	// query = "('ยิว')"
+
+	Query = []Flatnode{{0, 1, 2, "and"}, {2, 3, 4, "phrase2"}, {3, -1, -1, "ที่"}, {4, -1, -1, "2"}} //16742, 16749, 13811
+	query = "('the','ที่','2')"
+
+	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "ที่"}, {2, -1, -1, "2"}}
+	// query = "('ที่','2')"
+	Limit = 5
 	START ftime.CTime
 	END   ftime.CTime
 
@@ -103,7 +112,7 @@ func main() {
 	Sx := time.Now()
 	Result := Search(Root, Limit, START, END)
 	Sy := time.Now()
-	fmt.Println(Result)
+	// fmt.Println(Result)
 	fmt.Println("Result : ", len(Result))
 	OAy := time.Now()
 
@@ -124,15 +133,24 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 	Buffy := docInvert(Timey.Year(), int(Timey.Month()), Timey.Day(), Timey.Hour()+t, 0)
 	Buffy = append(Buffy, []byte{0, 0, 0}...)
 	ID_List := SearchData(tree, Buffx, Buffy)
-
-	placeholders := make([]string, len(ID_List))
-	args := make([]interface{}, len(ID_List))
-	for i, id := range ID_List {
+	// fmt.Println("INVDOCID : ", ID_List)
+	last := min(limit, len(ID_List))
+	newIDList := ID_List[:last]
+	// fmt.Println("MATCHING RESULT COUNT : ", len(ID_List))
+	// fmt.Println("LIMIT : ", limit)
+	// placeholders := make([]string, len(ID_List))
+	// args := make([]interface{}, len(ID_List))
+	placeholders := make([]string, last)
+	args := make([]interface{}, last)
+	for i, id := range newIDList {
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	x := "SELECT DOCID, TIME64, HEADLINE FROM HDL WHERE INVDOCID IN (" + strings.Join(placeholders, ",") + ") AND TIME64 >= ? AND TIME64 <= ?"
-	args = append(args, timex.UnixMilli(), timey.UnixMilli())
+	// for i, id := range ID_List {
+	// 	placeholders[i] = "?"
+	// 	args[i] = id
+	// }
+	x := "SELECT DOCID, TIME64, HEADLINE FROM HDL WHERE INVDOCID IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := Db.Query(x, args...)
 	checkerror(err)
 	defer rows.Close()
@@ -140,10 +158,13 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 		var DOCID string
 		var TIME64 int64
 		var HEADLINE string
+
 		err := rows.Scan(&DOCID, &TIME64, &HEADLINE)
 		checkerror(err)
-		DisplayTime := time.UnixMilli(int64(TIME64))
-		listdata = append(listdata, DisplayTime.UTC().Format("2006-01-02T15:04:05")+" "+DOCID+" "+HEADLINE+"\n")
+		if TIME64 >= timex.UnixMilli() && TIME64 <= timey.UnixMilli() {
+			DisplayTime := time.UnixMilli(int64(TIME64))
+			listdata = append(listdata, DisplayTime.UTC().Format("2006-01-02T15:04:05")+" "+DOCID+" "+HEADLINE+"\n")
+		}
 	}
 	sort.Slice(listdata, func(i, j int) bool {
 		return listdata[i] < listdata[j]
