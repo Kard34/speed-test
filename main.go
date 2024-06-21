@@ -77,7 +77,7 @@ var (
 
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "ที่"}, {2, -1, -1, "2"}}
 	// query = "('ที่','2')"
-	Limit = 100000
+	Limit = 1000
 	START ftime.CTime
 	END   ftime.CTime
 
@@ -109,7 +109,6 @@ func main() {
 	Sx := time.Now()
 	Result := Search(Root, Limit, START, END)
 	Sy := time.Now()
-	// fmt.Println(Result)
 	fmt.Println("Result : ", len(Result))
 	OAy := time.Now()
 
@@ -119,7 +118,6 @@ func main() {
 }
 
 func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []string) {
-	x1 := time.Now()
 	Timex := ParseStr(TimeToStr(timex))
 	Timey := ParseStr(TimeToStr(timey))
 	Buffx := docInvert(Timex.Year(), int(Timex.Month()), Timex.Day(), Timex.Hour(), 0)
@@ -131,25 +129,15 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 	Buffy := docInvert(Timey.Year(), int(Timey.Month()), Timey.Day(), Timey.Hour()+t, 0)
 	Buffy = append(Buffy, []byte{0, 0, 0}...)
 	ID_List := SearchData(tree, Buffx, Buffy)
-	fmt.Println("MATCHING TIME : ", time.Since(x1))
-	// fmt.Println("INVDOCID : ", ID_List)
 	fmt.Println("Result (ID) : ", len(ID_List))
 	last := min(limit, len(ID_List))
 	newIDList := ID_List[:last]
-	// fmt.Println("MATCHING RESULT COUNT : ", len(ID_List))
-	// fmt.Println("LIMIT : ", limit)
-	// placeholders := make([]string, len(ID_List))
-	// args := make([]interface{}, len(ID_List))
 	placeholders := make([]string, last)
 	args := make([]interface{}, last)
 	for i, id := range newIDList {
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	// for i, id := range ID_List {
-	// 	placeholders[i] = "?"
-	// 	args[i] = id
-	// }
 	x := "SELECT DOCID, TIME64, HEADLINE FROM HDL WHERE INVDOCID IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := Db.Query(x, args...)
 	checkerror(err)
@@ -196,67 +184,10 @@ func SearchMatching(tree *Treenode, buffx, buffy []byte) (chunkdata ChunkData, b
 		Chunk2, Buff2 = SearchMatching(tree.Right, buffx, buffy)
 	}
 	if tree.Left == nil && tree.Right == nil {
-		// x1 := time.Now()
-		// chunkdata, buff = LoadWord(tree.Value, buffx, buffy)
-		// fmt.Println("LOAD TIME : ", time.Since(x1))
 		chunkdata, buff = LoadWordFull(tree.Value)
 	} else {
 		chunkdata, buff = Match(Chunk1, Chunk2, Buff1, Buff2, tree.Value)
 	}
-	return
-}
-
-func LoadWord(word string, buffx, buffy []byte) (chunkdata ChunkData, buff []byte) {
-	Lpos1, Found1 := BinaryChunkBuff(buffx, word)
-	Lpos2, Found2 := BinaryChunkBuff(buffy, word)
-	_ = Found1
-	if Found2 {
-		Lpos2++
-	}
-	Allocate := 16
-	CountDocument := 0
-	CountPosition := 0
-	StartPoint := int32(CkData[word].Position) + 16
-	INVDOCID_LIST := make([]byte, 0)
-	PositionPoint := make([]int32, 2)
-
-	for i := Lpos1; i < Lpos2; i++ {
-		Buff1 := make([]byte, 10)
-		Fidx.Seek(int64(StartPoint+int32(i*10)), io.SeekStart)
-		Fidx.Read(Buff1)
-		INVID := Buff1[0:5]
-		INDEX := []byte{byte(CountPosition & 255), byte((CountPosition >> 8) & 255), byte((CountPosition >> 16) & 255)}
-		LENGTH := Buff1[8:10]
-		LengthValue := int(binary.LittleEndian.Uint16(LENGTH))
-		Buff10 := make([]byte, 0)
-		Buff10 = append(Buff10, INVID...)
-		Buff10 = append(Buff10, INDEX...)
-		Buff10 = append(Buff10, LENGTH...)
-		Allocate += 10
-		CountDocument++
-		CountPosition += LengthValue
-		INVDOCID_LIST = append(INVDOCID_LIST, Buff10...)
-		if i == Lpos1 {
-			Temp := Buff1[5:8]
-			Temp = append(Temp, []byte{0}...)
-			PositionPoint[0] = int32(binary.LittleEndian.Uint32(Temp))
-		} else if i == Lpos2-1 {
-			Temp := Buff1[5:8]
-			Temp = append(Temp, []byte{0}...)
-			PositionPoint[1] = int32(binary.LittleEndian.Uint32(Temp) + uint32(LengthValue))
-		}
-	}
-	Buff := make([]byte, (PositionPoint[1]-PositionPoint[0])*2)
-	Fidx.Seek(int64(StartPoint+int32(CkData[word].StartPosition)+(PositionPoint[0]*2)), io.SeekStart)
-	Fidx.Read(Buff)
-	buff = append(buff, INVDOCID_LIST...)
-	buff = append(buff, Buff...)
-	chunkdata = ChunkData{CkData[word].Index, CkData[word].Position, Allocate + (CountPosition * 2), CountDocument, Allocate - 16, CountPosition}
-	// x1 := time.Now()
-	// x, y := LoadWordFull(word)
-	// fmt.Println("LOADFULL TIME : ", time.Since(x1))
-	// fmt.Println("COMPARE HEADER : ", x == chunkdata)
-	// fmt.Println("COMPARE : ", bytes.Compare(y, buff))
 	return
 }
 
@@ -270,32 +201,80 @@ func LoadWordFull(word string) (chunkdata ChunkData, buff []byte) {
 	return
 }
 
-func BinaryChunkBuff(buffsearch []byte, word string) (lpos int, found bool) {
-	LposLo := 0
-	LposHi := CkData[word].CountDocument - 1
-	CompareResult := -1
-	lpos = 0
-	StartPoint := int32(CkData[word].Position) + 16
-	for LposLo <= LposHi {
-		lpos = (LposLo + LposHi) / 2
-		Buff := make([]byte, 10)
-		Fidx.Seek(int64(StartPoint+int32(lpos*10)), io.SeekStart)
-		Fidx.Read(Buff)
-		CompareResult = bytes.Compare(buffsearch[0:5], Buff[0:5])
-		if CompareResult < 0 {
-			LposHi = lpos - 1
-		} else if CompareResult > 0 {
-			LposLo = lpos + 1
-		} else {
-			break
-		}
-	}
-	if CompareResult > 0 {
-		lpos += 1
-	}
-	found = CompareResult == 0
-	return
-}
+// func LoadWord(word string, buffx, buffy []byte) (chunkdata ChunkData, buff []byte) {
+// 	Lpos1, Found1 := BinaryChunkBuff(buffx, word)
+// 	Lpos2, Found2 := BinaryChunkBuff(buffy, word)
+// 	_ = Found1
+// 	if Found2 {
+// 		Lpos2++
+// 	}
+// 	Allocate := 16
+// 	CountDocument := 0
+// 	CountPosition := 0
+// 	StartPoint := int32(CkData[word].Position) + 16
+// 	INVDOCID_LIST := make([]byte, 0)
+// 	PositionPoint := make([]int32, 2)
+// 	for i := Lpos1; i < Lpos2; i++ {
+// 		Buff1 := make([]byte, 10)
+// 		Fidx.Seek(int64(StartPoint+int32(i*10)), io.SeekStart)
+// 		Fidx.Read(Buff1)
+// 		INVID := Buff1[0:5]
+// 		INDEX := []byte{byte(CountPosition & 255), byte((CountPosition >> 8) & 255), byte((CountPosition >> 16) & 255)}
+// 		LENGTH := Buff1[8:10]
+// 		LengthValue := int(binary.LittleEndian.Uint16(LENGTH))
+// 		Buff10 := make([]byte, 0)
+// 		Buff10 = append(Buff10, INVID...)
+// 		Buff10 = append(Buff10, INDEX...)
+// 		Buff10 = append(Buff10, LENGTH...)
+// 		Allocate += 10
+// 		CountDocument++
+// 		CountPosition += LengthValue
+// 		INVDOCID_LIST = append(INVDOCID_LIST, Buff10...)
+// 		if i == Lpos1 {
+// 			Temp := Buff1[5:8]
+// 			Temp = append(Temp, []byte{0}...)
+// 			PositionPoint[0] = int32(binary.LittleEndian.Uint32(Temp))
+// 		} else if i == Lpos2-1 {
+// 			Temp := Buff1[5:8]
+// 			Temp = append(Temp, []byte{0}...)
+// 			PositionPoint[1] = int32(binary.LittleEndian.Uint32(Temp) + uint32(LengthValue))
+// 		}
+// 	}
+// 	Buff := make([]byte, (PositionPoint[1]-PositionPoint[0])*2)
+// 	Fidx.Seek(int64(StartPoint+int32(CkData[word].StartPosition)+(PositionPoint[0]*2)), io.SeekStart)
+// 	Fidx.Read(Buff)
+// 	buff = append(buff, INVDOCID_LIST...)
+// 	buff = append(buff, Buff...)
+// 	chunkdata = ChunkData{CkData[word].Index, CkData[word].Position, Allocate + (CountPosition * 2), CountDocument, Allocate - 16, CountPosition}
+// 	return
+// }
+
+// func BinaryChunkBuff(buffsearch []byte, word string) (lpos int, found bool) {
+// 	LposLo := 0
+// 	LposHi := CkData[word].CountDocument - 1
+// 	CompareResult := -1
+// 	lpos = 0
+// 	StartPoint := int32(CkData[word].Position) + 16
+// 	for LposLo <= LposHi {
+// 		lpos = (LposLo + LposHi) / 2
+// 		Buff := make([]byte, 10)
+// 		Fidx.Seek(int64(StartPoint+int32(lpos*10)), io.SeekStart)
+// 		Fidx.Read(Buff)
+// 		CompareResult = bytes.Compare(buffsearch[0:5], Buff[0:5])
+// 		if CompareResult < 0 {
+// 			LposHi = lpos - 1
+// 		} else if CompareResult > 0 {
+// 			LposLo = lpos + 1
+// 		} else {
+// 			break
+// 		}
+// 	}
+// 	if CompareResult > 0 {
+// 		lpos += 1
+// 	}
+// 	found = CompareResult == 0
+// 	return
+// }
 
 func Match(cho1, cho2 ChunkData, buffw1, buffw2 []byte, op string) (cho ChunkData, buff []byte) {
 	idx := 0
