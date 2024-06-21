@@ -66,11 +66,8 @@ var (
 	// Query = []Flatnode{{0, -1, -1, "ที่"}} // result : 16749
 	// query = "('ที่')"
 
-	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "และ"}, {2, -1, -1, "ที่"}} // 16749/16069
-	// query = "('และ','ที่')"
-
-	// Query = []Flatnode{{0, -1, -1, "และ"}} // result : 16096
-	// query = "('และ')"
+	// Query = []Flatnode{{0, 1, 2, "or"}, {1, -1, -1, "อธิบาย"}, {2, -1, -1, "ทองคำ"}}
+	// query = "('อธิบาย','ทองคำ')"
 
 	// Query = []Flatnode{{0, -1, -1, "ยิว"}} // result : 16749
 	// query = "('ยิว')"
@@ -80,7 +77,7 @@ var (
 
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "ที่"}, {2, -1, -1, "2"}}
 	// query = "('ที่','2')"
-	Limit = 10
+	Limit = 100000
 	START ftime.CTime
 	END   ftime.CTime
 
@@ -122,6 +119,7 @@ func main() {
 }
 
 func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []string) {
+	x1 := time.Now()
 	Timex := ParseStr(TimeToStr(timex))
 	Timey := ParseStr(TimeToStr(timey))
 	Buffx := docInvert(Timex.Year(), int(Timex.Month()), Timex.Day(), Timex.Hour(), 0)
@@ -133,7 +131,9 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 	Buffy := docInvert(Timey.Year(), int(Timey.Month()), Timey.Day(), Timey.Hour()+t, 0)
 	Buffy = append(Buffy, []byte{0, 0, 0}...)
 	ID_List := SearchData(tree, Buffx, Buffy)
+	fmt.Println("MATCHING TIME : ", time.Since(x1))
 	// fmt.Println("INVDOCID : ", ID_List)
+	fmt.Println("Result (ID) : ", len(ID_List))
 	last := min(limit, len(ID_List))
 	newIDList := ID_List[:last]
 	// fmt.Println("MATCHING RESULT COUNT : ", len(ID_List))
@@ -196,7 +196,10 @@ func SearchMatching(tree *Treenode, buffx, buffy []byte) (chunkdata ChunkData, b
 		Chunk2, Buff2 = SearchMatching(tree.Right, buffx, buffy)
 	}
 	if tree.Left == nil && tree.Right == nil {
-		chunkdata, buff = LoadWord(tree.Value, buffx, buffy)
+		// x1 := time.Now()
+		// chunkdata, buff = LoadWord(tree.Value, buffx, buffy)
+		// fmt.Println("LOAD TIME : ", time.Since(x1))
+		chunkdata, buff = LoadWordFull(tree.Value)
 	} else {
 		chunkdata, buff = Match(Chunk1, Chunk2, Buff1, Buff2, tree.Value)
 	}
@@ -249,6 +252,21 @@ func LoadWord(word string, buffx, buffy []byte) (chunkdata ChunkData, buff []byt
 	buff = append(buff, INVDOCID_LIST...)
 	buff = append(buff, Buff...)
 	chunkdata = ChunkData{CkData[word].Index, CkData[word].Position, Allocate + (CountPosition * 2), CountDocument, Allocate - 16, CountPosition}
+	// x1 := time.Now()
+	// x, y := LoadWordFull(word)
+	// fmt.Println("LOADFULL TIME : ", time.Since(x1))
+	// fmt.Println("COMPARE HEADER : ", x == chunkdata)
+	// fmt.Println("COMPARE : ", bytes.Compare(y, buff))
+	return
+}
+
+func LoadWordFull(word string) (chunkdata ChunkData, buff []byte) {
+	StartPoint := CkData[word].Position + 16
+	Buff := make([]byte, CkData[word].Allocate-16)
+	Fidx.Seek(int64(StartPoint), io.SeekStart)
+	Fidx.Read(Buff)
+	chunkdata = CkData[word]
+	buff = Buff
 	return
 }
 
