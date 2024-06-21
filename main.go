@@ -75,12 +75,12 @@ var (
 	// Query = []Flatnode{{0, -1, -1, "ยิว"}} // result : 16749
 	// query = "('ยิว')"
 
-	Query = []Flatnode{{0, 1, 2, "and"}, {2, 3, 4, "phrase2"}, {3, -1, -1, "ที่"}, {4, -1, -1, "2"}} //16742, 16749, 13811
+	Query = []Flatnode{{0, 1, 2, "and"}, {1, -1, -1, "the"}, {2, 3, 4, "phrase2"}, {3, -1, -1, "ที่"}, {4, -1, -1, "2"}} //16742, 16749, 13811
 	query = "('the','ที่','2')"
 
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "ที่"}, {2, -1, -1, "2"}}
 	// query = "('ที่','2')"
-	Limit = 5
+	Limit = 10
 	START ftime.CTime
 	END   ftime.CTime
 
