@@ -5,9 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -72,8 +70,8 @@ var (
 	// Query = []Flatnode{{0, -1, -1, "ยิว"}} // result : 13
 	// query = "('ยิว')"
 
-	// Query = []Flatnode{{0, 1, 2, "and"}, {1, -1, -1, "the"}, {2, 3, 4, "phrase2"}, {3, -1, -1, "ที่"}, {4, -1, -1, "2"}} //16742, 16749, 13811
-	// query = "('the','ที่','2')"
+	Query = []Flatnode{{0, 1, 2, "and"}, {1, -1, -1, "the"}, {2, 3, 4, "phrase2"}, {3, -1, -1, "ที่"}, {4, -1, -1, "2"}} //16742, 16749, 13811
+	query = "('the','ที่','2')"
 
 	// Query = []Flatnode{{0, 1, 2, "phrase2"}, {1, -1, -1, "ที่"}, {2, -1, -1, "2"}}
 	// query = "('ที่','2')"
@@ -81,26 +79,34 @@ var (
 	// Query = []Flatnode{{0, -1, -1, "and"}}
 	// query = "('and')"
 
-	Query = []Flatnode{{0, 1, 2, "and"}, {1, -1, -1, "and"}, {2, -1, -1, "2"}}
-	query = "('and','2')"
-	Limit = 10
-	START ftime.CTime
-	END   ftime.CTime
+	// Query = []Flatnode{{0, 1, 2, "and"}, {1, -1, -1, "and"}, {2, -1, -1, "2"}}
+	// query = "('and','2')"
+
+	// Query = []Flatnode{{0, 1, 2, "and"}, {1, -1, -1, "and"}, {2, 3, 4, "and"}, {3, -1, -1, "2"}, {4, 5, 6, "and"},
+	// 	{5, -1, -1, "3"}, {6, 7, 8, "and"}, {7, -1, -1, "4"}, {8, 9, 10, "and"},
+	// 	{9, -1, -1, "5"}, {10, 11, 12, "and"}, {11, -1, -1, "6"}, {12, 13, 14, "and"},
+	// 	{13, -1, -1, "7"}, {14, 15, 16, "and"}, {15, -1, -1, "8"}, {16, -1, -1, "9"}}
+	// query  = "('and','2','3','4','5','6','7','8','9')"
+	Limit  = 10
+	Offset = 0
+	START  ftime.CTime
+	END    ftime.CTime
 
 	CkData map[string]ChunkData
+	CkBuff []byte
 )
 
 func main() {
 	OAx := time.Now()
 	// ! Open .idx file
 	fidx, err := os.Open(Path + Filename + ".idx")
-	checkerror(err)
+	checkERROR(err)
 	Fidx = fidx
 	defer Fidx.Close()
 
 	// ! Open .sqlite file
 	db, err := sql.Open("sqlite3", Path+Filename+".sqlite")
-	checkerror(err)
+	checkERROR(err)
 	Db = db
 	defer Db.Close()
 	Lx := time.Now()
@@ -113,8 +119,9 @@ func main() {
 	END.Parse("2024-01-29T23:59:59")
 	Root := MakeTree(Query)
 	Sx := time.Now()
-	Result := Search(Root, Limit, START, END)
+	Result := Search(Root, Limit, Offset, START, END)
 	Sy := time.Now()
+	// fmt.Println(Result)
 	fmt.Println("Result : ", len(Result))
 	OAy := time.Now()
 
@@ -123,7 +130,7 @@ func main() {
 	fmt.Println("Overall Time : ", OAy.Sub(OAx))
 }
 
-func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []string) {
+func Search(tree *Treenode, limit, offset int, timex, timey ftime.CTime) (listdata []string) {
 	Timex := ParseStr(TimeToStr(timex))
 	Timey := ParseStr(TimeToStr(timey))
 	Buffx := docInvert(Timex.Year(), int(Timex.Month()), Timex.Day(), Timex.Hour(), 0)
@@ -134,35 +141,41 @@ func Search(tree *Treenode, limit int, timex, timey ftime.CTime) (listdata []str
 	}
 	Buffy := docInvert(Timey.Year(), int(Timey.Month()), Timey.Day(), Timey.Hour()+t, 0)
 	Buffy = append(Buffy, []byte{0, 0, 0}...)
-	ID_List := SearchData(tree, Buffx, Buffy)
-	fmt.Println("Result (ID) : ", len(ID_List))
-	last := min(limit, len(ID_List))
-	newIDList := ID_List[:last]
-	placeholders := make([]string, last)
-	args := make([]interface{}, last)
-	for i, id := range newIDList {
+	IDList := SearchData(tree, Buffx, Buffy)
+	fmt.Println("Result (ID) : ", len(IDList))
+	placeholders := make([]string, len(IDList))
+	args := make([]interface{}, len(IDList)+4)
+	for i, id := range IDList {
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	x := "SELECT DOCID, TIME64, HEADLINE FROM HDL WHERE INVDOCID IN (" + strings.Join(placeholders, ",") + ")"
+	args[len(args)-4] = timex.UnixMilli()
+	args[len(args)-3] = timey.UnixMilli()
+	args[len(args)-2] = limit
+	args[len(args)-1] = offset
+	x := `
+	SELECT DOCID, TIME64, HEADLINE 
+	FROM HDL 
+	WHERE INVDOCID IN` + `(` + strings.Join(placeholders, ",") + `)
+	AND TIME64 BETWEEN ? AND ?
+	ORDER BY TIME64
+	LIMIT ? OFFSET ?`
 	rows, err := Db.Query(x, args...)
-	checkerror(err)
+	checkERROR(err)
 	defer rows.Close()
 	for rows.Next() {
 		var DOCID string
 		var TIME64 int64
 		var HEADLINE string
-
 		err := rows.Scan(&DOCID, &TIME64, &HEADLINE)
-		checkerror(err)
-		if TIME64 >= timex.UnixMilli() && TIME64 <= timey.UnixMilli() {
-			DisplayTime := time.UnixMilli(int64(TIME64))
-			listdata = append(listdata, DisplayTime.UTC().Format("2006-01-02T15:04:05")+" "+DOCID+" "+HEADLINE+"\n")
-		}
+		checkERROR(err)
+
+		DisplayTime := time.UnixMilli(int64(TIME64))
+		listdata = append(listdata, DisplayTime.UTC().Format("2006-01-02T15:04:05")+" "+DOCID+" "+HEADLINE+"\n")
 	}
-	sort.Slice(listdata, func(i, j int) bool {
-		return listdata[i] < listdata[j]
-	})
+	if err := rows.Err(); err != nil {
+		fmt.Println(err)
+	}
 	return
 }
 
@@ -173,6 +186,8 @@ func SearchData(tree *Treenode, buffx, buffy []byte) (invdocid_list []uint64) {
 		Buff8 = append(Buff8, Buff[i*10:(i*10)+5]...)
 		Buff8 = append(Buff8, []byte{0, 0, 0}...)
 		INVDOCID := binary.LittleEndian.Uint64(Buff8)
+		Buff := make([]byte, 8)
+		binary.LittleEndian.PutUint64(Buff, INVDOCID)
 		invdocid_list = append(invdocid_list, INVDOCID)
 	}
 	return
@@ -198,89 +213,32 @@ func SearchMatching(tree *Treenode, buffx, buffy []byte) (chunkdata ChunkData, b
 }
 
 func LoadWordFull(word string) (chunkdata ChunkData, buff []byte) {
-	StartPoint := CkData[word].Position + 16
-	Buff := make([]byte, CkData[word].Allocate-16)
-	Fidx.Seek(int64(StartPoint), io.SeekStart)
-	Fidx.Read(Buff)
+	query := "SELECT BUFF FROM IDX WHERE WORD='" + word + "'"
+	rows, err := Db.Query(query)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var Buff []byte
+		err := rows.Scan(&Buff)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		buff = Buff
+	}
 	chunkdata = CkData[word]
-	buff = Buff
+
+	err = rows.Err()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	return
 }
-
-// func LoadWord(word string, buffx, buffy []byte) (chunkdata ChunkData, buff []byte) {
-// 	Lpos1, Found1 := BinaryChunkBuff(buffx, word)
-// 	Lpos2, Found2 := BinaryChunkBuff(buffy, word)
-// 	_ = Found1
-// 	if Found2 {
-// 		Lpos2++
-// 	}
-// 	Allocate := 16
-// 	CountDocument := 0
-// 	CountPosition := 0
-// 	StartPoint := int32(CkData[word].Position) + 16
-// 	INVDOCID_LIST := make([]byte, 0)
-// 	PositionPoint := make([]int32, 2)
-// 	for i := Lpos1; i < Lpos2; i++ {
-// 		Buff1 := make([]byte, 10)
-// 		Fidx.Seek(int64(StartPoint+int32(i*10)), io.SeekStart)
-// 		Fidx.Read(Buff1)
-// 		INVID := Buff1[0:5]
-// 		INDEX := []byte{byte(CountPosition & 255), byte((CountPosition >> 8) & 255), byte((CountPosition >> 16) & 255)}
-// 		LENGTH := Buff1[8:10]
-// 		LengthValue := int(binary.LittleEndian.Uint16(LENGTH))
-// 		Buff10 := make([]byte, 0)
-// 		Buff10 = append(Buff10, INVID...)
-// 		Buff10 = append(Buff10, INDEX...)
-// 		Buff10 = append(Buff10, LENGTH...)
-// 		Allocate += 10
-// 		CountDocument++
-// 		CountPosition += LengthValue
-// 		INVDOCID_LIST = append(INVDOCID_LIST, Buff10...)
-// 		if i == Lpos1 {
-// 			Temp := Buff1[5:8]
-// 			Temp = append(Temp, []byte{0}...)
-// 			PositionPoint[0] = int32(binary.LittleEndian.Uint32(Temp))
-// 		} else if i == Lpos2-1 {
-// 			Temp := Buff1[5:8]
-// 			Temp = append(Temp, []byte{0}...)
-// 			PositionPoint[1] = int32(binary.LittleEndian.Uint32(Temp) + uint32(LengthValue))
-// 		}
-// 	}
-// 	Buff := make([]byte, (PositionPoint[1]-PositionPoint[0])*2)
-// 	Fidx.Seek(int64(StartPoint+int32(CkData[word].StartPosition)+(PositionPoint[0]*2)), io.SeekStart)
-// 	Fidx.Read(Buff)
-// 	buff = append(buff, INVDOCID_LIST...)
-// 	buff = append(buff, Buff...)
-// 	chunkdata = ChunkData{CkData[word].Index, CkData[word].Position, Allocate + (CountPosition * 2), CountDocument, Allocate - 16, CountPosition}
-// 	return
-// }
-
-// func BinaryChunkBuff(buffsearch []byte, word string) (lpos int, found bool) {
-// 	LposLo := 0
-// 	LposHi := CkData[word].CountDocument - 1
-// 	CompareResult := -1
-// 	lpos = 0
-// 	StartPoint := int32(CkData[word].Position) + 16
-// 	for LposLo <= LposHi {
-// 		lpos = (LposLo + LposHi) / 2
-// 		Buff := make([]byte, 10)
-// 		Fidx.Seek(int64(StartPoint+int32(lpos*10)), io.SeekStart)
-// 		Fidx.Read(Buff)
-// 		CompareResult = bytes.Compare(buffsearch[0:5], Buff[0:5])
-// 		if CompareResult < 0 {
-// 			LposHi = lpos - 1
-// 		} else if CompareResult > 0 {
-// 			LposLo = lpos + 1
-// 		} else {
-// 			break
-// 		}
-// 	}
-// 	if CompareResult > 0 {
-// 		lpos += 1
-// 	}
-// 	found = CompareResult == 0
-// 	return
-// }
 
 func Match(cho1, cho2 ChunkData, buffw1, buffw2 []byte, op string) (cho ChunkData, buff []byte) {
 	idx := 0
@@ -405,9 +363,9 @@ func comparepharse(bo1 []byte, bo2 []byte, diff int) (buff []byte) {
 }
 
 func Load() {
-	x := "SELECT * FROM IDX WHERE WORD IN " + query
+	x := "SELECT WORD, WORDINDEX, POSITION, ALLOCATE, COUNTDOCUMENT, STARTPOSITION, COUNTPOSITION FROM IDX WHERE WORD IN " + query
 	rows, err := Db.Query(x)
-	checkerror(err)
+	checkERROR(err)
 
 	CkData = map[string]ChunkData{}
 
@@ -416,13 +374,13 @@ func Load() {
 		var INDEX int
 		var POSITION int
 		var ALLOCATE int
-		var COUNTDOCMENT int
+		var COUNTDOCUMENT int
 		var STARTPOSITION int
 		var COUNTPOSITION int
 
-		err := rows.Scan(&WORD, &INDEX, &POSITION, &ALLOCATE, &COUNTDOCMENT, &STARTPOSITION, &COUNTPOSITION)
-		checkerror(err)
-		CkData[WORD] = ChunkData{INDEX, POSITION, ALLOCATE, COUNTDOCMENT, STARTPOSITION, COUNTPOSITION}
+		err := rows.Scan(&WORD, &INDEX, &POSITION, &ALLOCATE, &COUNTDOCUMENT, &STARTPOSITION, &COUNTPOSITION)
+		checkERROR(err)
+		CkData[WORD] = ChunkData{INDEX, POSITION, ALLOCATE, COUNTDOCUMENT, STARTPOSITION, COUNTPOSITION}
 	}
 	if err = rows.Err(); err != nil {
 		panic(err)
@@ -461,7 +419,7 @@ func maketree(data map[int]Flatnode, head int) (root *Treenode) {
 	return
 }
 
-func checkerror(e error) {
+func checkERROR(e error) {
 	if e != nil {
 		fmt.Println(e)
 	}
